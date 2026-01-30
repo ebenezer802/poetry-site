@@ -78,32 +78,65 @@ export default function Home() {
     fetchPoems();
   }, []);
 
-  const handleLike = async (id) => {
-    const ref = doc(db, "poems", id);
-    await updateDoc(ref, { likes: increment(1) });
+import { getAuth, signInAnonymously } from "firebase/auth";
 
-    setPoems((prs) =>
-      prs.map((poem) =>
-        poem.id === id ? { ...poem, likes: (poem.likes || 0) + 1 } : poem
-      )
+const auth = getAuth(app);
+signInAnonymously(auth).catch(console.error);
+
+const handleLike = async (id) => {
+  const user = auth.currentUser;
+  if (!user) return;
+
+  const ref = doc(db, "poems", id);
+  const snap = await getDoc(ref);
+  const data = snap.data();
+
+  // Check if user already liked
+  if (data.likes && data.likes[user.uid]) return;
+
+  // Add user's like
+  await updateDoc(ref, { [`likes.${user.uid}`]: true });
+
+  // Update state
+  setPoems((prs) =>
+    prs.map((poem) =>
+      poem.id === id
+        ? { ...poem, likes: Object.keys({ ...(data.likes || {}), [user.uid]: true }).length }
+        : poem
+    )
+  );
+};
+  
+const handleComment = async (id, text, parentId = null) => {
+  if (!text) return;
+  const user = auth.currentUser;
+  if (!user) return;
+
+  const ref = doc(db, "poems", id);
+  const snap = await getDoc(ref);
+  const data = snap.data();
+  let newComments = [...(data.comments || [])];
+
+  if (parentId) {
+    // add reply to parent comment
+    newComments = newComments.map(c =>
+      c.id === parentId 
+        ? { ...c, replies: [...(c.replies || []), { text, author: user.uid, id: Date.now().toString() }] } 
+        : c
     );
-  };
+  } else {
+    // add new top-level comment
+    newComments.push({ text, author: user.uid, id: Date.now().toString(), replies: [] });
+  }
 
-  const handleComment = async (id, text) => {
-    if (!text) return;
-    const ref = doc(db, "poems", id);
-    await updateDoc(ref, {
-      comments: arrayUnion({ text, time: Date.now() })
-    });
+  await updateDoc(ref, { comments: newComments });
 
-    setPoems((prs) =>
-      prs.map((poem) =>
-        poem.id === id
-          ? { ...poem, comments: [...(poem.comments || []), { text }] }
-          : poem
-      )
-    );
-  };
+  setPoems((prs) =>
+    prs.map((poem) =>
+      poem.id === id ? { ...poem, comments: newComments } : poem
+    )
+  );
+};
 
   return (
     <main style={{ padding: "6rem 1.5rem", maxWidth: "700px", margin: "auto" }}>
@@ -150,13 +183,16 @@ export default function Home() {
 
           {poem.comments?.length > 0 && (
             <div style={{ marginTop: "1rem" }}>
-              {poem.comments.map((c, i) => (
-                <p key={i} style={{ fontSize: "0.9rem", opacity: 0.8 }}>
-                  💬 {c.text}
-                </p>
-              ))}
-            </div>
-          )}
+              {poem.comments?.map((c) => (
+  <div key={c.id} style={{ marginBottom: "0.5rem" }}>
+    <p>💬 {c.text}</p>
+    {/* Render replies */}
+    {c.replies?.map((r) => (
+      <p key={r.id} style={{ marginLeft: "1.5rem", opacity: 0.8 }}>↪ {r.text}</p>
+    ))}
+    {/* Reply input can be another CommentBox with onSubmit={(t) => handleComment(poem.id, t, c.id)} */}
+  </div>
+))}
 
           {index < poemList.length - 1 && (
             <a
